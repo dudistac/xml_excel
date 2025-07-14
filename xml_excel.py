@@ -851,11 +851,4 @@ def remove_child_nodes(root: ET.Element, namespaces: dict[str, str], node_name: 
         for child in list(node):
             node.remove(child)
         return root
-    
-
-with Workbook(r"E:\asd.xlsx") as f:
-    print(f.read_sheet(0))
-    t = [["haha", "bb"]]
-    f.upload_sheet(0, t)
-    print(f.sheet.table)
 
