@@ -1,14 +1,19 @@
-import xml.etree.ElementTree as ET
-import re
-from io import BytesIO
 from datetime import datetime
+from io import BytesIO
 from os.path import exists, splitext
 from zipfile import ZipFile
+import re
+import xml.etree.ElementTree as ET
 
 # Read the file, then close
 class Workbook:
 
     def __init__(self, fp: str):
+        """Initializes the Workbook instance.
+
+        Args:
+            fp (str): File path to the workbook to open.
+        """
         
         self._validate_path(fp)
 
@@ -21,7 +26,7 @@ class Workbook:
 
         self._zip = ZipFile(self.fp, "r")
 
-        self._prepare_excel_file()
+        self._file_integrity_assessment()
 
         self._set_props()
 
@@ -47,8 +52,16 @@ class Workbook:
             self._zip.close()
             self._zip = None
 
-        
+    
+    # Init methods
     def _validate_path(self, fp: str):
+        """Checks whether the filepath is supported.
+
+        Args:
+            fp (str): Path of the excel file.
+        Returns:
+            None
+        """
 
         if not isinstance(fp, str):
             raise UserWarning("The file path is not str.")
@@ -61,12 +74,48 @@ class Workbook:
             raise UserWarning("The file could not be found.")
 
 
-    def _prepare_excel_file(self):
+    # File modification
+    def _save_xml(self, paths: list, streams: list):
+        """Saves the modifications done on the excel file.
+
+        Args:
+            paths (list[str]): List of files to modify.
+            streams (list): List of new xml files in bytes.
+        Returns:
+            None
+        """
+
+        # TODO - replace function, to use the harddrive instead of memory
+
+        # List every file from the excel into the memory
+        temp_buffer = BytesIO()
+
+        with ZipFile(temp_buffer, 'w') as zip_buffer:
+            for item in self._zip.infolist():
+                content = self._zip.read(item.filename)
+                zip_buffer.writestr(item, streams[paths.index(item.filename)] if item.filename in paths else content)
+
+        # Put back every element
+        with ZipFile(self.fp, 'w') as file:
+            with ZipFile(temp_buffer, 'r') as temp:
+                for item in temp.infolist():
+                    file.writestr(item, temp.read(item.filename))
+
+        self._zip = ZipFile(self.fp, 'r')
+
+
+    # Methods after open is ran
+    def _file_integrity_assessment(self):
+        """Checks for excel file integrity.
+
+        Returns:
+            None
+        """
         
         required_folders = ['docProps', 'xl', 'xl/theme', 'xl/worksheets']
         required_files = ['docProps/core.xml', 'docProps/app.xml']
 
-        self._folders = self.list_folders()
+        self._folders = self._list_folders()
 
         for folder in required_folders:
             if folder not in self._folders:
@@ -80,10 +129,15 @@ class Workbook:
                 raise UserWarning(f"File corrupted: the {file} xml file is not found in the excel file.")
 
         # Create the sharedstrings.xml file if the excel file is empty
-        self.add_sharedstrings()
+        self._add_sharedstrings()
 
 
-    def list_folders(self) -> list[str]:
+    def _list_folders(self) -> list[str]:
+        """Returns every folder found in the compressed excel file.
+
+        Returns:
+            list[str]: List of folders.
+        """
 
         folders = []
 
@@ -105,7 +159,12 @@ class Workbook:
         return folders
     
 
-    def add_sharedstrings(self):
+    def _add_sharedstrings(self):
+        """Creates the sharedStrings.xml file in case it is missing. The relationships are also added to other xml files.
+
+        Returns:
+            None
+        """
         
         fn = "xl/sharedStrings.xml"
 
@@ -120,7 +179,6 @@ class Workbook:
                              </sst>'''
 
             xml_content.encode('utf-8')
-
 
             self._zip.close()
 
@@ -171,29 +229,14 @@ class Workbook:
         ids = {int(rel.attrib['Id'].replace('rId', '')) for rel in relationships}
 
         return f"rId{max(ids, default=0) + 1}"
-    
-
-    def _save_xml(self, paths: list, streams: list):
-
-        # List every file from the excel into the memory
-        temp_buffer = BytesIO()
-
-        with ZipFile(temp_buffer, 'w') as zip_buffer:
-            for item in self._zip.infolist():
-                content = self._zip.read(item.filename)
-                zip_buffer.writestr(item, streams[paths.index(item.filename)] if item.filename in paths else content)
-
-        # Put back every element
-        with ZipFile(self.fp, 'w') as file:
-            with ZipFile(temp_buffer, 'r') as temp:
-                for item in temp.infolist():
-                    file.writestr(item, temp.read(item.filename))
-
-        self._zip = ZipFile(self.fp, 'r')
 
     
     def _set_props(self):
+        """Sets basic data from the excel file to the class instance.
 
+        Returns:
+            None
+        """
 
         self.modification_date = self.return_date()
 
@@ -205,8 +248,12 @@ class Workbook:
 
 
     def return_date(self) -> datetime | None:
+        """Returns the modification date of the file.
 
-        '''Returns the modification date of the file.'''
+        Returns:
+            datetime: for the date.
+            None: if class instance is reached after file is closed.
+        """
 
         date = None
 
@@ -219,8 +266,12 @@ class Workbook:
 
 
     def return_version(self) -> str | None:
+        """Returns the excel version.
 
-        '''Returns the Excel version the file was created in.'''
+        Returns:
+            str: version number.
+            None: if class instance is reached after file is closed.
+        """
 
         version = None
 
@@ -232,6 +283,14 @@ class Workbook:
 
 
     def return_sheets(self) -> dict:
+        """Returns every sheet.
+
+        Returns:
+            dict: A dictionary where each key is a sheet name (str) and the corresponding value
+                  is the sheet's associated attribute value extracted from the XML. 
+                  For example, {'Sheet1': '1', 'Sheet2': '2', ...}.
+                  If no sheets are found or the ZIP archive is not loaded, returns an empty dictionary
+        """
 
         sheet_dict = {}
 
@@ -247,8 +306,14 @@ class Workbook:
 
 
     def return_metadata(self) -> dict:
+        """Returns the metadata relationships from the workbook's .rels file.
 
-        '''Create a dictionary for sheet_ids and sheet_paths.'''
+        Returns:
+            dict: A dictionary where each key is a relationship ID (str) and the value is the
+                target path (str) of that relationship. For example:
+                {'rId1': 'worksheets/sheet1.xml', 'rId2': 'worksheets/sheet2.xml', ...}.
+                Returns an empty dictionary if the .rels file is missing or the ZIP archive is not loaded.
+        """
 
         metadata = {}
 
@@ -266,7 +331,100 @@ class Workbook:
         return metadata
     
 
+    # General methods to handle excel logic
+    def _translate_coords(self, row: int, col: int) -> str:
+        """Translates the column and row indexes into a cell ID ie.: A18... (column + row)
+
+        Args:
+            row (int): Row number.
+            col (int): Col number.
+        Returns:
+            str: Cell id.
+        """
+
+        # Avoid the confusion, as lists and excel worksheets start the ir indexing at 0 and 1
+        if 0 in [row, col]:
+            raise UserWarning("Row and column indices must be greater than zero (1-based indexing).")
+
+        range = ""
+
+        while col > 0:
+
+            col -= 1
+
+            range = chr(ord('A') + col % 26) + range
+
+            col //= 26
+
+        range += str(row)
+
+        return range
+    
+
+    def _translate_end_point(self, end_point: str) -> tuple[int]:
+        """Converts an Excel-style cell reference (e.g. 'C12') into a tuple of (row, column) indexes.
+        Note - the row does not count with the 0-based indexing of python.
+
+        Args:
+            end_point (str): Cell reference string in Excel format (letters + digits), e.g. 'A1', 'BC23'.
+
+        Returns:
+            tuple[int, int]: A tuple where the first element is the row number (int),
+                             and the second element is the column number (int).
+        """
+
+        column = re.search("[A-Z]+", end_point).group(0)
+
+        row_index = int(end_point.replace(column, ""))
+
+        column_index = 0
+
+        for char in column:
+
+            column_index = column_index * 26 + (ord(char) - ord("A")) + 1
+
+        return row_index, column_index
+ 
+
+    def _get_sheet_id(self, sheet_id: int | str) -> str:
+        """Resolves a sheet identifier given as either a sheet name (str) or an index (int) to a valid sheet name.
+
+        Args:
+            sheet_id (int | str): The sheet identifier, either as a zero-based index (int) or a sheet name (str).
+
+        Returns:
+            str: The validated sheet name corresponding to the provided identifier.
+        """
+
+        sheets = list(self.sheets.keys())
+
+        # Handle invalid id-s
+        if isinstance(sheet_id, str):
+            if sheet_id not in sheets:
+                raise UserWarning(f"Invalid sheet name: {sheet_id}")
+
+        else:
+            if sheet_id > len(sheets):
+                raise UserWarning(f"Invalid sheet index: {sheet_id}")
+            
+            sheet_id = sheets[sheet_id]
+
+        return sheet_id
+    
+
+    # Read methods
     def read_sheet(self, sheet_id: str | int, headers: list | None=None) -> list[list[str]]:
+        """Reads the content of a specified sheet from the workbook and returns it as a 2D list of strings.
+
+        Args:
+            sheet_id (str | int): Name or index of the sheet.
+            headers (list | None, optional): A list of header strings to replace the first row's headers.
+                                             If None, original headers are kept. Defaults to None.
+
+        Returns:
+            list[list[str]]: A 2D list representing the sheet's rows and columns,
+                             where each inner list is a row of string cell values.
+        """
 
         if self._zip is not None:
 
@@ -282,13 +440,13 @@ class Workbook:
 
             # Get the coordinates for the active range
             end_point = self._get_dimension(path)
-            end_point = self._translate_end_point(end_point)
+            end_point = self._translate_end_point(end_point) # Don't subtract 1 --> end point is used as the upper bound of "range()"
 
             # Generate empty table to populate with values
             self.sheet = self.Worksheet(self, end_point, key, path)
 
             # Populate values
-            self.sheet.populate_table(values, self._translate_end_point)
+            self.sheet.populate_table(values, )
 
             # Replace the headers
             if headers is not None:
@@ -298,11 +456,15 @@ class Workbook:
 
             return self.sheet.table
 
- 
-
- 
 
     def _get_dimension(self, path: str) -> str:
+        """Returns the last used cell ID of the given sheet ie.: A8, C95, ZA51... (column + row)
+
+        Args:
+            path (str): XML path for the sheet.
+        Returns:
+            str: Identifier for the cell.
+        """
 
         stream = get_stream(self._zip, path)
 
@@ -317,15 +479,16 @@ class Workbook:
         return result[-1]
 
  
+    # Write methods
     def upload_sheet(self, sheet_id: str | int, new_table: list[list]):
+        """Replaces the content of the sheet.
 
-        '''Upload a table to the target sheet, replacing all values found in there.
-
-        sheet_id: (int | str) - identififer for the sheet.
-
-        new_table: (list) - data to upload.'''
-
- 
+        Args:
+            sheet_id (str | int): Name or index of the sheet.
+            new_table (list[list]) - 2D list of the new content
+        Returns:
+            None
+        """
 
         if self._zip is not None:
 
@@ -336,17 +499,9 @@ class Workbook:
             key = self.sheets[sheet_id]
             path = f"xl/{self.sheet_metadata[key]}"
 
-
             # Gather the data from the XML file
             stream = get_stream(self._zip, path)
             namespaces = gather_namespaces(BytesIO(stream.encode('utf-8')))
-    
-            pattern = "<.+?>"
-            header = ""; counter = 0
-
-            for x in re.finditer(pattern, stream):
-                header += x.group(); counter += 1
-                if counter == 2: break
 
             # Get the tree
             tree = ET.ElementTree(ET.fromstring(stream))
@@ -356,57 +511,38 @@ class Workbook:
             end_point = "A1" if not new_table else self._translate_coords(len(new_table), len(new_table[0]))
 
             # Remove the content from the
-            root = self._remove_child_nodes(root, namespaces, ".//default:sheetData")
+            root = remove_child_nodes(root, namespaces, ".//default:sheetData")
 
             # Insert the table
-            stream = self._insert_xml_node(root, namespaces, new_table, end_point)
-
- 
-            # Issue - ET library discards unused namespace --> get original header and insert it back to the stringified xml content
-            stream = re.sub(pattern, header, stream, 1).encode('utf8')
+            stream = self._insert_new_values_to_xml(root, namespaces, new_table, end_point)
 
             # Refresh the xml file
-            self._save_xml([path], [stream])
+            self._save_xml([path], [stream.encode('utf8')])
 
             # After every modification refresh the current_sheet
             self.sheet = self.Worksheet(self, (len(new_table), len(new_table[0])), key, path)
             self.sheet.table = new_table
-
- 
-    def _translate_coords(self, row_count: int, col_count:int) -> str:
-
-        range = ""
-
-        while col_count > 0:
-
-            col_count -= 1
-
-            range = chr(ord('A') + col_count % 26) + range
-
-            col_count //= 26
-
-        range += str(row_count)
-
-        return range
     
 
-    def _remove_child_nodes(self, root: ET.Element, namespaces: dict[str, str], node_name: str) -> ET.Element:
+    def _insert_new_values_to_xml(self, root: ET.ElementTree, namespaces: dict, table: list[list], end_point: str) -> str:
+        """Updates the sharedStrings xml and the XML file for the given sheet with the new content.
 
-        node = root.findall(node_name, namespaces)[0]
-        for child in list(node):
-            node.remove(child)
-        return root
-    
+        Args:
+            root (ET.Element): The XML root of the sheet.
+            namespaces (dict[str, str]): Namespace mappings used for XPath queries.
+            table (list[list]): 2D list to upload.
+            end_point (str): Last cell of the used range.
 
-    def _insert_xml_node(self, root: ET.ElementTree, namespaces: dict, table: list, end_point: str) -> str:
+        Returns:
+            str: The modified root.
+        """
 
         # Create the sharedstrings.xml file if not found
-        self.add_sharedstrings()
+        self._add_sharedstrings()
 
         # Gather sharedStrings data
         stream = get_stream(self._zip, "xl/sharedStrings.xml")
         str_xml_ns = gather_namespaces(BytesIO(stream.encode('utf-8')))
-
 
         # Create the hierarchy object for the sharedStrings.xml
         str_xml = ET.ElementTree(ET.fromstring(stream))
@@ -461,87 +597,82 @@ class Workbook:
                 else:
                     value_node.text = str(element)
 
- 
-
         # Upload back the sheet
         if original_count != str_xml_count:
 
             str_xml_root.set('count', str(str_xml_count))
             str_xml_root.set('uniqueCount', str(str_xml_count))
 
-        str_xml_str = f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n{ET.tostring(str_xml_root, encoding="unicode")}'
+        str_xml_str = ET.tostring(str_xml_root, encoding='unicode')
         self._save_xml(["xl/sharedStrings.xml"], [str_xml_str.encode('utf-8')])
  
         return ET.tostring(root, encoding='unicode')
-
-
-    def _translate_end_point(self, end_point: str) -> tuple[int]:
-
-        column = re.search("[A-Z]+", end_point).group(0)
-
-        row_index = int(end_point.replace(column, ""))
-
-        column_index = 0
-
-        for char in column:
-
-            column_index = column_index * 26 + (ord(char) - ord("A")) + 1
-
-        return row_index, column_index
- 
-
-    def _get_sheet_id(self, sheet_id: int | str) -> str:
-
-        sheets = list(self.sheets.keys())
-
-        # Handle invalid id-s
-        if isinstance(sheet_id, str):
-            if sheet_id not in sheets:
-                raise UserWarning(f"Invalid sheet name: {sheet_id}")
-
-        else:
-            if sheet_id > len(sheets):
-                raise UserWarning(f"Invalid sheet index: {sheet_id}")
-            
-            sheet_id = sheets[sheet_id]
-
-        return sheet_id
     
 
     def _is_string_used(self, str_xml_root: ET.ElementTree, namespaces: dict, value_to_search: str) -> tuple[bool, int]:
+        """Returns whether the string is already part of the sharedStrings.xml and its position.
+
+        Args:
+            str_xml_root (ET.ElementTree): Parsed XML tree of sharedStrings.xml.
+            namespaces (dict): Namespace mapping used for XML queries.
+            value_to_search (str): The string value to look for in the shared strings.
+
+        Returns:
+            tuple[bool, int]: A tuple where the first element is True if the string is found,
+                              False otherwise; the second element is the index of the string 
+                              if found, or the total number of strings in order to continue.
+        """
 
         items = {x.text: i for i, x in enumerate(str_xml_root.findall(".//default:si/default:t", namespaces)) if x.text}
 
         if value_to_search in items:
-
             return True, list(items.keys()).index(value_to_search)
 
         else:
-
             return False, len(items)
     
 
     class Worksheet:
 
-
         def __init__(self, parent: object, end_point: tuple[int], rid: str, path: str):
+            """Initializes a Worksheet instance.
 
+            Args:
+                parent (object): Reference to the parent Workbook.
+                end_point (tuple[int, int]): Tuple of excel based (row_count, column_count) defining the size of the worksheet.
+                rid (str): Relationship ID or unique identifier for the worksheet.
+                path (str): Full name of the worksheet XML file.
+            """
 
             self.parent = parent
             self.ID = rid
             self.path = path
-            self.row_count, self.column_count = end_point
-            self.table = self._resize_table()
+            self.table = self._resize_table(*end_point)
 
 
-        def _resize_table(self):
+        def _resize_table(self, row: int, col: int):
+            """Prepares an empty table to store the sheet content.
 
-            table = [["" for _ in range(self.column_count)] for _ in range(self.row_count)]
+            Args:
+                row (int): Row count of the table (starting from 1).
+                col (int): Column count of the table (starting from 1).
+            Returns:
+                None
+            """
+
+            table = [["" for _ in range(col)] for _ in range(row)]
 
             return table
 
 
-        def populate_table(self, values: dict, func: object):
+        def populate_table(self, values: dict):
+            """Fills the table with data.
+
+            Args:
+                values (dict): Mapping of shared string IDs to their corresponding string values.
+            Returns:
+                None
+            """
 
             data_pairs, direct_values = self._process_sheet()
 
@@ -557,6 +688,13 @@ class Workbook:
 
 
         def _process_sheet(self) -> tuple[dict, dict]:
+            """Parses the worksheet XML to extract cell values, separating shared string references and direct values.
+
+            Returns:
+                tuple[dict[str, int], dict[str, str]]:
+                    - First dict maps cell positions (e.g. 'A1') to shared string IDs (int).
+                    - Second dict maps cell positions to direct string values (non-shared strings).
+            """
 
             data_pairs, values = {}, {}
 
@@ -584,7 +722,19 @@ class Workbook:
             return data_pairs, values
 
 
+# General XML methods
 def process_xml(zip: ZipFile, filename: str, search_str: str, attrib_type: str="") -> list[str]:
+    """Extracts and returns values from an XML file within a ZIP archive based on a given XPath and attribute type.
+
+    Args:
+        zip (ZipFile): Open ZipFile object containing the XML file.
+        filename (str): Path to the XML file inside the ZIP archive.
+        search_str (str): XPath expression to locate the desired XML elements.
+        attrib_type (str, optional): Attribute or element name to extract text from. Defaults to "".
+
+    Returns:
+        list[str]: List of extracted string values matching the search criteria.
+    """
 
     stream = get_stream(zip, filename)
 
@@ -596,6 +746,25 @@ def process_xml(zip: ZipFile, filename: str, search_str: str, attrib_type: str="
 
 
 def get_xml_value(stream: str, search_str: str, namespaces: dict, attrib_type: str="") -> None | list[ET.Element] | list[dict] | str:
+    """Parses XML from a string and retrieves elements or specific attribute values based on the search criteria.
+
+    Args:
+        stream (str): XML content as a string.
+        search_str (str): XPath expression to find elements.
+        namespaces (dict): Namespace prefixes and URIs for XPath queries.
+        attrib_type (str, optional): Determines the output format:
+            - "" (default): Returns a list of matching ET.Element objects.
+            - "text": Returns a list of text content from the matched elements.
+            - "value": Returns a list of dictionaries with attributes of the matched elements.
+
+    Returns:
+        None | list[ET.Element] | list[dict] | list[str]:
+            Depending on `attrib_type`, returns:
+            - None if no elements found.
+            - List of ET.Element objects if `attrib_type` is empty.
+            - List of text strings if `attrib_type` is "text".
+            - List of dictionaries of element attributes if `attrib_type` is "value".
+    """
 
 
     output = None
@@ -620,11 +789,17 @@ def get_xml_value(stream: str, search_str: str, namespaces: dict, attrib_type: s
 
     return output
 
- 
 
+def gather_namespaces(file: BytesIO) -> dict[str, str]:
+    """Extracts XML namespaces from the given file-like object.
 
+    Args:
+        file: (BytesIO): XML data in byte format.
 
-def gather_namespaces(file):
+    Returns:
+        dict[str, str]: A dictionary mapping namespace prefixes to their URIs.
+                        The default namespace is mapped to the key 'default'.
+    """
 
     namespaces = {}
 
@@ -645,10 +820,37 @@ def gather_namespaces(file):
 
 
 def get_stream(comp: ZipFile, filename: str) -> str:
+    """Reads and returns the content of a file inside a ZIP archive as a UTF-8 decoded string.
+
+    Args:
+        comp (ZipFile): An open ZipFile object.
+        filename (str): The path of the file inside the ZIP archive to read.
+
+    Returns:
+        str: The decoded content of the specified file.
+    """
 
     with comp.open(filename) as file:
 
         return file.read().decode('utf-8')
+    
+
+def remove_child_nodes(root: ET.Element, namespaces: dict[str, str], node_name: str) -> ET.Element:
+        """Removes every found child node matching `node_name` from the given XML root element.
+
+        Args:
+            root (ET.Element): The XML root element from which nodes will be removed.
+            namespaces (dict[str, str]): Namespace mappings used for XPath queries.
+            node_name (str): XPath expression to find the nodes to remove.
+
+        Returns:
+            ET.Element: The modified root element after removing the matching child nodes.
+        """
+
+        node = root.findall(node_name, namespaces)[0]
+        for child in list(node):
+            node.remove(child)
+        return root
     
 
 with Workbook(r"E:\asd.xlsx") as f:
