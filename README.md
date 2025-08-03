@@ -6,7 +6,7 @@ Notes:
 
 Technical notes:
 - Currently the data upload happens only in the PC memory --> in large excel files, the script is limited by the PC specs
-- Only supports a single sheet, after each read the previous is overwritten
+- Supports multiple sheets; each sheet is read and initialized on demand without overwriting others / or alternatively every sheet can be read at once
 
 TO-DO:
 - Add option to handle file modification on the harddrive
