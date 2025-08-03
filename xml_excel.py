@@ -5,7 +5,7 @@ from zipfile import ZipFile
 import re
 import xml.etree.ElementTree as ET
 
-# Read the file, then close
+
 class Workbook:
 
     def __init__(self, fp: str):
@@ -232,19 +232,17 @@ class Workbook:
 
     
     def _set_props(self):
-        """Sets basic data from the excel file to the class instance.
-
-        Returns:
-            None
-        """
+        """Sets basic data from the excel file to the class instance."""
 
         self.modification_date = self.return_date()
 
         self.version = self.return_version()
 
-        self.sheets = self.return_sheets()
+        self.sheet_ids = self.return_sheets()
 
         self.sheet_metadata = self.return_metadata()
+
+        self.sheets = self.prepare_sheet_container()
 
 
     def return_date(self) -> datetime | None:
@@ -331,6 +329,17 @@ class Workbook:
         return metadata
     
 
+    def prepare_sheet_container(self) -> dict:
+        """Prepares a dictionary to later store each sheet found in the workbook.
+
+        Returns:
+            dict: A dictionary where each key is a sheet name (str) and the corresponding value
+                  is an empty list.
+        """
+
+        return {sheet_id: None for sheet_id in self.sheet_ids}
+
+
     # General methods to handle excel logic
     def _translate_coords(self, row: int, col: int) -> str:
         """Translates the column and row indexes into a cell ID ie.: A18... (column + row)
@@ -396,7 +405,7 @@ class Workbook:
             str: The validated sheet name corresponding to the provided identifier.
         """
 
-        sheets = list(self.sheets.keys())
+        sheets = list(self.sheet_ids.keys())
 
         # Handle invalid id-s
         if isinstance(sheet_id, str):
@@ -413,6 +422,22 @@ class Workbook:
     
 
     # Read methods
+    def read_all(self):
+        """Reads the content of all sheets in the workbook and returns them as a list of 2D string lists.
+
+        Returns:
+            list[list[list[str]]]: A list where each element is a 2D list representing one sheet.
+                                   Each 2D list contains rows, and each row is a list of string cell values.
+        """
+
+
+        if self._zip is None:
+            return []
+
+        return [self.read_sheet(i) for i in range(len(self.sheets))]
+
+
+
     def read_sheet(self, sheet_id: str | int, headers: list | None=None) -> list[list[str]]:
         """Reads the content of a specified sheet from the workbook and returns it as a 2D list of strings.
 
@@ -431,7 +456,7 @@ class Workbook:
             sheet_id = self._get_sheet_id(sheet_id)
 
             # Decide which file to read from
-            key = self.sheets[sheet_id]
+            key = self.sheet_ids[sheet_id]
             path = f"xl/{self.sheet_metadata[key]}"
 
             # Get the general file which stores every value accross each sheet as a dict
@@ -443,10 +468,11 @@ class Workbook:
             end_point = self._translate_end_point(end_point) # Don't subtract 1 --> end point is used as the upper bound of "range()"
 
             # Generate empty table to populate with values
-            self.sheet = self.Worksheet(self, end_point, key, path)
+            sheet = self.Worksheet(self, end_point, key, path)
+            self.sheets[sheet_id] = sheet
 
             # Populate values
-            self.sheet.populate_table(values, )
+            sheet.populate_table(values)
 
             # Replace the headers
             if headers is not None:
@@ -454,7 +480,7 @@ class Workbook:
                     for index, header in enumerate(headers):
                         self.sheet.table[0][index] = header
 
-            return self.sheet.table
+            return sheet.table
 
 
     def _get_dimension(self, path: str) -> str:
@@ -496,7 +522,7 @@ class Workbook:
             sheet_id = self._get_sheet_id(sheet_id)
 
             # Decide which file to read from
-            key = self.sheets[sheet_id]
+            key = self.sheet_ids[sheet_id]
             path = f"xl/{self.sheet_metadata[key]}"
 
             # Gather the data from the XML file
@@ -520,9 +546,10 @@ class Workbook:
             self._save_xml([path], [stream.encode('utf8')])
 
             # After every modification refresh the current_sheet
-            self.sheet = self.Worksheet(self, (len(new_table), len(new_table[0])), key, path)
-            self.sheet.table = new_table
-    
+            sheet = self.Worksheet(self, (len(new_table), len(new_table[0])), key, path)
+            sheet.table = new_table
+            self.sheets[sheet_id] = sheet
+            
 
     def _insert_new_values_to_xml(self, root: ET.ElementTree, namespaces: dict, table: list[list], end_point: str) -> str:
         """Updates the sharedStrings xml and the XML file for the given sheet with the new content.
